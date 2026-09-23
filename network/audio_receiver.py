@@ -8,10 +8,13 @@ class AudioReceiver:
     def __init__(self, ip, port=8081):
         self.ip = ip
         self.port = port
+
         self.sock = None
         self.running = False
         self.thread = None
         self.ffplay = None
+
+        self.first_timestamp = None
 
     def connect(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -47,12 +50,21 @@ class AudioReceiver:
         try:
             while self.running:
 
-                header = self._recv_exact(4)
+                # 4 bytes length + 8 bytes timestamp
+                header = self._recv_exact(12)
 
                 if not header:
                     break
 
-                packet_length = struct.unpack(">I", header)[0]
+                packet_length = struct.unpack(
+                    ">I",
+                    header[0:4]
+                )[0]
+
+                timestamp_ms = struct.unpack(
+                    ">q",
+                    header[4:12]
+                )[0]
 
                 if packet_length <= 0 or packet_length > 1024 * 1024:
                     print(
@@ -66,15 +78,29 @@ class AudioReceiver:
                 if not data:
                     break
 
-                print(f"[Audio] AAC packet: {len(data)} bytes")
+                if self.first_timestamp is None:
+                    self.first_timestamp = timestamp_ms
 
-                if self.ffplay and self.ffplay.stdin:
-                    try:
-                        self.ffplay.stdin.write(data)
-                        self.ffplay.stdin.flush()
-                    except (BrokenPipeError, OSError):
-                        print("[Audio] ffplay closed")
-                        break
+                    print(
+                        f"[Audio] Stream start timestamp: "
+                        f"{timestamp_ms} ms"
+                    )
+
+                relative_timestamp = (
+                    timestamp_ms - self.first_timestamp
+                )
+
+                print(
+                    f"[Audio] "
+                    f"timestamp={timestamp_ms} ms | "
+                    f"relative={relative_timestamp} ms | "
+                    f"AAC={len(data)} bytes"
+                )
+
+                self.handle_audio_packet(
+                    timestamp_ms,
+                    data
+                )
 
         except ConnectionError:
             print("[Audio] Connection closed")
@@ -85,11 +111,30 @@ class AudioReceiver:
         finally:
             self.running = False
 
+    def handle_audio_packet(self, timestamp_ms, data):
+
+        if not self.ffplay:
+            return
+
+        if not self.ffplay.stdin:
+            return
+
+        try:
+            self.ffplay.stdin.write(data)
+            self.ffplay.stdin.flush()
+
+        except (BrokenPipeError, OSError):
+            print("[Audio] ffplay closed")
+            self.running = False
+
     def _recv_exact(self, size):
         data = bytearray()
 
         while len(data) < size:
-            chunk = self.sock.recv(size - len(data))
+
+            chunk = self.sock.recv(
+                size - len(data)
+            )
 
             if not chunk:
                 return None
@@ -103,7 +148,9 @@ class AudioReceiver:
 
         if self.sock:
             try:
-                self.sock.shutdown(socket.SHUT_RDWR)
+                self.sock.shutdown(
+                    socket.SHUT_RDWR
+                )
             except OSError:
                 pass
 
@@ -124,6 +171,7 @@ class AudioReceiver:
             try:
                 self.ffplay.terminate()
                 self.ffplay.wait(timeout=2)
+
             except Exception:
                 try:
                     self.ffplay.kill()
@@ -131,5 +179,7 @@ class AudioReceiver:
                     pass
 
             self.ffplay = None
+
+        self.first_timestamp = None
 
         print("[Audio] Closed")

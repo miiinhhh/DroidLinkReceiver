@@ -53,6 +53,8 @@ class StreamWorker(QThread):
         self.running = True
         self.ffplay = None
 
+        self.first_timestamp = None
+
     def recv_exact(self, size):
 
         data = b""
@@ -87,13 +89,35 @@ class StreamWorker(QThread):
                 "Waiting for H.264 stream..."
             )
 
+            # =====================================================
             # SPS
+            # Format:
+            # [4 bytes length]
+            # [8 bytes timestamp]
+            # [SPS payload]
+            # =====================================================
+
+            sps_header = self.recv_exact(12)
+
+            if not sps_header:
+                raise ConnectionError(
+                    "No SPS received"
+                )
+
             sps_size = struct.unpack(
                 ">I",
-                self.recv_exact(4)
+                sps_header[0:4]
             )[0]
 
-            if sps_size <= 0 or sps_size > 1024 * 1024:
+            sps_timestamp = struct.unpack(
+                ">q",
+                sps_header[4:12]
+            )[0]
+
+            if (
+                sps_size <= 0
+                or sps_size > 1024 * 1024
+            ):
                 raise ValueError(
                     f"Invalid SPS size: {sps_size}"
                 )
@@ -102,13 +126,35 @@ class StreamWorker(QThread):
                 sps_size
             )
 
+            # =====================================================
             # PPS
+            # Format:
+            # [4 bytes length]
+            # [8 bytes timestamp]
+            # [PPS payload]
+            # =====================================================
+
+            pps_header = self.recv_exact(12)
+
+            if not pps_header:
+                raise ConnectionError(
+                    "No PPS received"
+                )
+
             pps_size = struct.unpack(
                 ">I",
-                self.recv_exact(4)
+                pps_header[0:4]
             )[0]
 
-            if pps_size <= 0 or pps_size > 1024 * 1024:
+            pps_timestamp = struct.unpack(
+                ">q",
+                pps_header[4:12]
+            )[0]
+
+            if (
+                pps_size <= 0
+                or pps_size > 1024 * 1024
+            ):
                 raise ValueError(
                     f"Invalid PPS size: {pps_size}"
                 )
@@ -117,11 +163,24 @@ class StreamWorker(QThread):
                 pps_size
             )
 
+            print(
+                f"[Video] SPS timestamp="
+                f"{sps_timestamp} ms"
+            )
+
+            print(
+                f"[Video] PPS timestamp="
+                f"{pps_timestamp} ms"
+            )
+
             self.status.emit(
                 "H.264 connected"
             )
 
+            # =====================================================
             # Start ffplay
+            # =====================================================
+
             self.ffplay = subprocess.Popen(
                 FFPLAY_COMMAND,
                 stdin=subprocess.PIPE
@@ -135,15 +194,32 @@ class StreamWorker(QThread):
                 self.to_annex_b(pps)
             )
 
+            # =====================================================
+            # Video packets
+            #
+            # Format:
+            # [4 bytes length]
+            # [8 bytes timestamp]
+            # [H.264 payload]
+            # =====================================================
+
             frame_count = 0
 
             while self.running:
 
-                size_data = self.recv_exact(4)
+                header = self.recv_exact(12)
+
+                if not header:
+                    break
 
                 packet_size = struct.unpack(
                     ">I",
-                    size_data
+                    header[0:4]
+                )[0]
+
+                timestamp_ms = struct.unpack(
+                    ">q",
+                    header[4:12]
                 )[0]
 
                 if (
@@ -151,11 +227,33 @@ class StreamWorker(QThread):
                     or packet_size > 10 * 1024 * 1024
                 ):
                     raise ValueError(
-                        f"Invalid H.264 packet size: {packet_size}"
+                        f"Invalid H.264 packet size: "
+                        f"{packet_size}"
                     )
 
                 packet = self.recv_exact(
                     packet_size
+                )
+
+                if not packet:
+                    break
+
+                if self.first_timestamp is None:
+
+                    self.first_timestamp = (
+                        timestamp_ms
+                    )
+
+                relative_timestamp = (
+                    timestamp_ms
+                    - self.first_timestamp
+                )
+
+                print(
+                    f"[Video] "
+                    f"timestamp={timestamp_ms} ms | "
+                    f"relative={relative_timestamp} ms | "
+                    f"H264={len(packet)} bytes"
                 )
 
                 self.send_to_ffplay(
@@ -167,7 +265,8 @@ class StreamWorker(QThread):
                 if frame_count % 30 == 0:
 
                     self.status.emit(
-                        f"Streaming... {frame_count} frames"
+                        f"Streaming... "
+                        f"{frame_count} frames"
                     )
 
         except Exception as e:
@@ -195,6 +294,7 @@ class StreamWorker(QThread):
                 try:
 
                     self.ffplay.terminate()
+
                     self.ffplay.wait(
                         timeout=2
                     )
@@ -259,6 +359,7 @@ class StreamWorker(QThread):
         self.running = False
 
         try:
+
             self.sock.shutdown(
                 socket.SHUT_RDWR
             )
