@@ -19,10 +19,15 @@ def discover_devices():
     try:
         sock.bind(("0.0.0.0", 0))
 
-        # Mạng của bạn hiện tại: 192.168.1.x
+        sock.setsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_BROADCAST,
+            1
+        )
+
         sock.sendto(
             request,
-            ("192.168.1.255", DISCOVERY_PORT)
+            ("255.255.255.255", DISCOVERY_PORT)
         )
 
         while True:
