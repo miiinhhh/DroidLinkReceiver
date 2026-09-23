@@ -503,6 +503,26 @@ class MainWindow(QMainWindow):
             lambda: self.pages.setCurrentIndex(1)
         )
 
+        remote = QPushButton("⌁   Remote Control")
+        remote.setObjectName("nav")
+        remote.setEnabled(False)
+        remote.setToolTip("Coming soon")
+
+        files = QPushButton("⇩   File Transfer")
+        files.setObjectName("nav")
+        files.setEnabled(False)
+        files.setToolTip("Coming soon")
+
+        clipboard = QPushButton("▣   Clipboard")
+        clipboard.setObjectName("nav")
+        clipboard.setEnabled(False)
+        clipboard.setToolTip("Coming soon")
+
+        media = QPushButton("♫   Media Control")
+        media.setObjectName("nav")
+        media.setEnabled(False)
+        media.setToolTip("Coming soon")
+
         settings = QPushButton(
             "⚙   Settings"
         )
@@ -517,6 +537,11 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(home)
         layout.addWidget(mirror)
+        layout.addWidget(remote)
+        layout.addWidget(files)
+        layout.addWidget(clipboard)
+        layout.addWidget(media)
+        layout.addSpacing(12)
         layout.addWidget(settings)
 
         layout.addStretch()
@@ -562,7 +587,7 @@ class MainWindow(QMainWindow):
         )
 
         subtitle = QLabel(
-            "Find and connect to Android devices on your local network."
+            "Discover Android devices automatically on your local network."
         )
 
         subtitle.setObjectName(
@@ -748,8 +773,8 @@ class MainWindow(QMainWindow):
         )
 
         self.preview = QLabel(
-            "Screen preview\n\n"
-            "Connect to an Android device to begin."
+            "SCREEN MIRROR\n\n"
+            "Connect to an Android device, then press Start Sharing."
         )
 
         self.preview.setObjectName(
@@ -774,14 +799,17 @@ class MainWindow(QMainWindow):
         self.device_status = QLabel(
             "Device: —"
         )
+        self.device_status.setObjectName("deviceStatus")
 
         self.fps_status = QLabel(
-            "FPS: —"
+            "Stream: Idle"
         )
+        self.fps_status.setObjectName("deviceStatus")
 
         self.network_status = QLabel(
             "Network: —"
         )
+        self.network_status.setObjectName("deviceStatus")
 
         stats.addWidget(
             self.device_status
@@ -1077,7 +1105,12 @@ class MainWindow(QMainWindow):
         if message == "H.264 connected":
 
             self.preview.setText(
-                "DroidLink is streaming..."
+                "DROIDLINK\n\n"
+                "Screen mirroring is active."
+            )
+
+            self.fps_status.setText(
+                "Stream: Active"
             )
 
     def on_stream_error(self, message):
@@ -1125,8 +1158,8 @@ class MainWindow(QMainWindow):
         )
 
         self.preview.setText(
-            "Screen preview\n\n"
-            "Connect to an Android device to begin."
+            "SCREEN MIRROR\n\n"
+            "Connect to an Android device, then press Start Sharing."
         )
 
         self.mirror_status.setText(
