@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from network.discovery import discover_devices
 from network.connection import DroidLinkConnection
+from network.audio_receiver import AudioReceiver
 from ui.styles import APP_STYLE
 
 
@@ -477,6 +478,7 @@ class MainWindow(QMainWindow):
 
         self.discovery_worker = None
         self.stream_worker = None
+        self.audio_receiver = None
 
         self.build_ui()
 
@@ -1063,8 +1065,11 @@ class MainWindow(QMainWindow):
                 self.stream_worker.wait(
                     1000
                 )
+            self.stream_worker = None
 
-                self.stream_worker = None
+            if self.audio_receiver:
+                self.audio_receiver.close()
+                self.audio_receiver = None
 
             # Close old connection
             if self.connection:
@@ -1134,17 +1139,17 @@ class MainWindow(QMainWindow):
     def start_sharing(self):
 
         if not self.connection:
-
             QMessageBox.warning(
                 self,
                 "Chưa kết nối",
                 "Vui lòng kết nối với điện thoại trước."
             )
-
             return
 
         try:
-
+            # =========================
+            # VIDEO
+            # =========================
             self.stream_worker = StreamWorker(
                 self.connection.sock
             )
@@ -1159,25 +1164,47 @@ class MainWindow(QMainWindow):
 
             self.stream_worker.start()
 
+            # =========================
+            # AUDIO
+            # =========================
+            self.audio_receiver = AudioReceiver(
+                self.current_device["ip"],
+                8081
+            )
+
+            self.audio_receiver.connect()
+
+            # =========================
+            # START STREAM
+            # =========================
             self.connection.start_stream()
 
-            self.start_button.setEnabled(
-                False
-            )
-
-            self.stop_button.setEnabled(
-                True
-            )
+            self.start_button.setEnabled(False)
+            self.stop_button.setEnabled(True)
 
             self.mirror_status.setText(
                 "Đang chờ điện thoại bắt đầu chia sẻ..."
             )
 
             self.statusBar().showMessage(
-                "Waiting for Android stream..."
+                "Waiting for Android video + audio stream..."
             )
 
         except Exception as e:
+
+            print(
+                "Share Error:",
+                repr(e)
+            )
+
+            if self.audio_receiver:
+                self.audio_receiver.close()
+                self.audio_receiver = None
+
+            if self.stream_worker:
+                self.stream_worker.stop()
+                self.stream_worker.wait(1000)
+                self.stream_worker = None
 
             QMessageBox.critical(
                 self,
@@ -1185,13 +1212,8 @@ class MainWindow(QMainWindow):
                 str(e)
             )
 
-            self.start_button.setEnabled(
-                True
-            )
-
-            self.stop_button.setEnabled(
-                False
-            )
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
 
     def on_stream_status(self, message):
 
@@ -1242,7 +1264,11 @@ class MainWindow(QMainWindow):
                 1000
             )
 
-            self.stream_worker = None
+        self.stream_worker = None
+
+        if self.audio_receiver:
+            self.audio_receiver.close()
+            self.audio_receiver = None
 
         if self.connection:
 

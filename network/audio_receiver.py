@@ -2,9 +2,11 @@ import socket
 import struct
 import subprocess
 import threading
+import os
 
 
 class AudioReceiver:
+
     def __init__(self, ip, port=8081):
         self.ip = ip
         self.port = port
@@ -13,38 +15,60 @@ class AudioReceiver:
         self.running = False
         self.thread = None
         self.ffplay = None
-
         self.first_timestamp = None
+        self.format_checked = False
 
     def connect(self):
+        print(f"[Audio] Connecting to {self.ip}:{self.port}...")
+
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.settimeout(5)
-        self.sock.connect((self.ip, self.port))
-        self.sock.settimeout(None)
 
-        # AAC ADTS stream -> ffplay -> speaker
-        self.ffplay = subprocess.Popen(
-            [
-                "ffplay",
-                "-hide_banner",
-                "-loglevel", "warning",
-                "-fflags", "nobuffer",
-                "-flags", "low_delay",
-                "-f", "aac",
-                "-i", "pipe:0"
-            ],
-            stdin=subprocess.PIPE
-        )
+        try:
+            self.sock.connect((self.ip, self.port))
 
-        self.running = True
+            print(
+                f"[Audio] TCP connection successful "
+                f"to {self.ip}:{self.port}"
+            )
 
-        self.thread = threading.Thread(
-            target=self._receive_loop,
-            daemon=True
-        )
-        self.thread.start()
+            self.sock.settimeout(None)
 
-        print(f"[Audio] Connected to {self.ip}:{self.port}")
+            ffplay_environment = os.environ.copy()
+            ffplay_environment["SDL_AUDIODRIVER"] = "directsound"
+
+            self.ffplay = subprocess.Popen(
+                [
+                    "ffplay",
+                    "-hide_banner",
+                    "-loglevel", "verbose",
+                    "-nodisp",
+                    "-vn",
+                    "-volume", "100",
+                    "-probesize", "32",
+                    "-analyzeduration", "0",
+                    "-f", "aac",
+                    "-i", "pipe:0"
+                ],
+                stdin=subprocess.PIPE,
+                env=ffplay_environment
+            )
+
+            self.running = True
+
+            self.thread = threading.Thread(
+                target=self._receive_loop,
+                daemon=True
+            )
+
+            self.thread.start()
+
+            print("[Audio] Receiver thread started")
+
+        except Exception as e:
+            print(f"[Audio] Connect error: {e}")
+            self.close()
+            raise
 
     def _receive_loop(self):
         try:
@@ -54,6 +78,7 @@ class AudioReceiver:
                 header = self._recv_exact(12)
 
                 if not header:
+                    print("[Audio] Connection closed by Android")
                     break
 
                 packet_length = struct.unpack(
@@ -76,6 +101,7 @@ class AudioReceiver:
                 data = self._recv_exact(packet_length)
 
                 if not data:
+                    print("[Audio] Audio packet incomplete")
                     break
 
                 if self.first_timestamp is None:
@@ -91,11 +117,22 @@ class AudioReceiver:
                 )
 
                 print(
-                    f"[Audio] "
-                    f"timestamp={timestamp_ms} ms | "
-                    f"relative={relative_timestamp} ms | "
-                    f"AAC={len(data)} bytes"
+                    f"[Audio] timestamp={timestamp_ms} ms "
+                    f"| relative={relative_timestamp} ms "
+                    f"| AAC={len(data)} bytes"
                 )
+
+                if not self.format_checked:
+                    self.format_checked = True
+                    if len(data) < 2 or data[0] != 0xFF or (data[1] & 0xF6) != 0xF0:
+                        print(
+                            "[Audio] Payload khong co ADTS header. "
+                            "Android co the dang gui AAC raw; ffplay se khong "
+                            "giai ma duoc neu thieu AudioSpecificConfig. "
+                            f"first_bytes={data[:8].hex()}"
+                        )
+                    else:
+                        print("[Audio] AAC ADTS header detected")
 
                 self.handle_audio_packet(
                     timestamp_ms,
@@ -104,6 +141,10 @@ class AudioReceiver:
 
         except ConnectionError:
             print("[Audio] Connection closed")
+
+        except OSError as e:
+            if self.running:
+                print(f"[Audio] Socket error: {e}")
 
         except Exception as e:
             print(f"[Audio] Receiver error: {e}")
@@ -119,6 +160,15 @@ class AudioReceiver:
         if not self.ffplay.stdin:
             return
 
+        if self.ffplay.poll() is not None:
+            print(
+                f"[Audio] ffplay da thoat truoc khi nhan packet nay "
+                f"(exit code {self.ffplay.returncode}). "
+                "AAC dau vao bi tu choi hoac audio device khong mo duoc."
+            )
+            self.running = False
+            return
+
         try:
             self.ffplay.stdin.write(data)
             self.ffplay.stdin.flush()
@@ -128,6 +178,7 @@ class AudioReceiver:
             self.running = False
 
     def _recv_exact(self, size):
+
         data = bytearray()
 
         while len(data) < size:
@@ -144,9 +195,11 @@ class AudioReceiver:
         return bytes(data)
 
     def close(self):
+
         self.running = False
 
         if self.sock:
+
             try:
                 self.sock.shutdown(
                     socket.SHUT_RDWR
@@ -162,6 +215,7 @@ class AudioReceiver:
             self.sock = None
 
         if self.ffplay:
+
             try:
                 if self.ffplay.stdin:
                     self.ffplay.stdin.close()
@@ -173,6 +227,7 @@ class AudioReceiver:
                 self.ffplay.wait(timeout=2)
 
             except Exception:
+
                 try:
                     self.ffplay.kill()
                 except Exception:
@@ -180,6 +235,8 @@ class AudioReceiver:
 
             self.ffplay = None
 
+        self.thread = None
         self.first_timestamp = None
+        self.format_checked = False
 
         print("[Audio] Closed")
